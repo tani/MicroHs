@@ -87,7 +87,8 @@ void mhs_free_context(MhsContextPtr ctx) {
             sp_table = NULL;
         }
     }
-    
+
+    argarray = NULL;
     free(ctx);
 }
 
@@ -119,6 +120,42 @@ static char* node_to_string(NODEPTR node, size_t* len) {
     return result;
 }
 
+static int run_program_from_bfile(
+    MhsContextPtr ctx,
+    BFILE *bf,
+    char **result,
+    size_t *result_len)
+{
+    NODEPTR prog = parse_top(bf, 0);
+    closeb(bf);
+
+    if (!prog) {
+        fprintf(stderr, "Failed to parse expression: %s\n", ctx->error_msg);
+        strncpy(ctx->error_msg, "Failed to parse expression", sizeof(ctx->error_msg) - 1);
+        ctx->error_occurred = 1;
+        return -1;
+    }
+
+    CLEARSTK();
+    start_exec(prog);
+    flushb((BFILE*)FORPTR(comb_stdout)->payload.string);
+    flushb((BFILE*)FORPTR(comb_stderr)->payload.string);
+
+    if (result && result_len) {
+        char *rendered = node_to_string(prog, result_len);
+        if (!rendered) {
+            strncpy(ctx->error_msg, "Failed to convert result to string", sizeof(ctx->error_msg) - 1);
+            ctx->error_occurred = 1;
+            gc();
+            return -1;
+        }
+        *result = rendered;
+    }
+
+    gc();
+    return 0;
+}
+
 int mhs_eval_string(MhsContextPtr ctx, const char* expr, size_t len, char** result, size_t* result_len) {
     if (!ctx) return -1;
     if (!ctx->initialized) return -1;
@@ -143,42 +180,9 @@ int mhs_eval_string(MhsContextPtr ctx, const char* expr, size_t len, char** resu
         return -1;
     }
     
-    // Parse the program from the buffer
-    NODEPTR prog;
-    prog = parse_top(bf, 0);
-    closeb(bf);
-    
-    if (!prog) {
-        fprintf(stderr, "Failed to parse expression: %s\n", ctx->error_msg);
-        strncpy(ctx->error_msg, "Failed to parse expression", sizeof(ctx->error_msg) - 1);
-        ctx->error_occurred = 1;
-        current_ctx = NULL;
-        return -1;
-    }
-    
-    // Clear stack
-    CLEARSTK();
-    
-    // Evaluate the parsed program
-    start_exec(prog);
-    // Flush standard handles in case there is some BFILE buffering
-    flushb((BFILE*)FORPTR(comb_stdout)->payload.string);
-    flushb((BFILE*)FORPTR(comb_stderr)->payload.string);
-    gc();      
-    NODEPTR eval_result = prog;               
-   
-    
-    // Convert result to string
-    *result = node_to_string(eval_result, result_len);
-    if (!*result) {
-        strncpy(ctx->error_msg, "Failed to convert result to string", sizeof(ctx->error_msg) - 1);
-        ctx->error_occurred = 1;
-        current_ctx = NULL;
-        return -1;
-    }
-    
+    int rc = run_program_from_bfile(ctx, bf, result, result_len);
     current_ctx = NULL;
-    return 0; // Success
+    return rc;
 }
 
 int mhs_run_string(MhsContextPtr ctx, const char* expr, size_t len) {
@@ -205,32 +209,63 @@ int mhs_run_string(MhsContextPtr ctx, const char* expr, size_t len) {
         return -1;
     }
     
-    // Parse the program from the buffer
-    NODEPTR prog;
-    prog = parse_top(bf, 0);
-    closeb(bf);
-    
-    if (!prog) {
-        fprintf(stderr, "Failed to parse expression: %s\n", ctx->error_msg);
-        strncpy(ctx->error_msg, "Failed to parse expression", sizeof(ctx->error_msg) - 1);
+    int rc = run_program_from_bfile(ctx, bf, NULL, NULL);
+    current_ctx = NULL;
+    return rc;
+}
+
+int mhs_run_zstring(MhsContextPtr ctx, const char* expr, size_t len) {
+    if (!ctx) return -1;
+    if (!ctx->initialized) return -1;
+    if (ctx->error_occurred) return -1;
+
+    current_ctx = ctx;
+    ctx->error_occurred = 0;
+
+    if (setjmp(ctx->error_jmp) != 0) {
+        current_ctx = NULL;
+        return -1;
+    }
+
+    BFILE *bf = openb_rd_mem((uint8_t*)expr, len);
+    if (!bf) {
+        strncpy(ctx->error_msg, "Failed to create input buffer", sizeof(ctx->error_msg) - 1);
         ctx->error_occurred = 1;
         current_ctx = NULL;
         return -1;
     }
-    
-    // Clear stack
-    CLEARSTK();
-    
-    // Evaluate the parsed program
-    start_exec(prog);
-    // Flush standard handles in case there is some BFILE buffering
-    flushb((BFILE*)FORPTR(comb_stdout)->payload.string);
-    flushb((BFILE*)FORPTR(comb_stderr)->payload.string);
-    gc();      
-    NODEPTR eval_result = prog;               
-   
+
+    int c = getb(bf);
+    if (c < 0) {
+        strncpy(ctx->error_msg, "Compressed input missing header", sizeof(ctx->error_msg) - 1);
+        ctx->error_occurred = 1;
+        current_ctx = NULL;
+        closeb(bf);
+        return -1;
+    }
+#if WANT_BASE64
+    if (c != 'z' && c != 'v') {
+        ungetb(c, bf);
+        bf = add_base64_decoder(bf);
+        c = getb(bf);
+        if (c < 0) {
+            strncpy(ctx->error_msg, "Compressed input missing header", sizeof(ctx->error_msg) - 1);
+            ctx->error_occurred = 1;
+            current_ctx = NULL;
+            closeb(bf);
+            return -1;
+        }
+    }
+#endif
+    if (c == 'z') {
+        bf = add_lz77_decompressor(bf);
+    } else {
+        ungetb(c, bf);
+    }
+
+    int rc = run_program_from_bfile(ctx, bf, NULL, NULL);
     current_ctx = NULL;
-    return 0; // Success
+    return rc;
 }
 
 
@@ -243,4 +278,35 @@ void mhs_free_result(char* result) {
 const char* mhs_get_error(MhsContextPtr ctx) {
     if (!ctx) return "Invalid context";
     return ctx->error_msg;
+}
+
+int mhs_context_set_args(MhsContextPtr ctx, const char *argv[], size_t argc) {
+    if (!ctx || !ctx->initialized || ctx->error_occurred) {
+        return -1;
+    }
+
+    current_ctx = ctx;
+    ctx->error_occurred = 0;
+
+    if (setjmp(ctx->error_jmp) != 0) {
+        current_ctx = NULL;
+        return -1;
+    }
+
+    NODEPTR list = mkNil();
+    for (size_t i = 0; i < argc; ++i) {
+        size_t idx = argc - 1 - i;
+        NODEPTR str = mkStringC((char *)argv[idx]);
+        list = mkCons(str, list);
+    }
+    argarray = arr_alloc(1, list);
+    argarray->permanent = true;
+    if (argc > 0) {
+        progname = (char *)argv[0];
+    } else {
+        progname = "<libmhsi>";
+    }
+
+    current_ctx = NULL;
+    return 0;
 }

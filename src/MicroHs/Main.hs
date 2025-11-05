@@ -10,8 +10,9 @@ import Control.Monad
 import Control.Applicative
 import Data.Maybe
 import System.Environment
+import Control.Exception(finally)
 import MicroHs.Compile
-import MicroHs.CompileCache
+import MicroHs.CompileCache(getCompMdls, cachedNonPkgModuleNames, getPkgs, getCacheTables, getPathPkgs)
 import MicroHs.Exp(Exp(Var, Lit))
 import MicroHs.Expr(Lit(LInt))
 import MicroHs.ExpPrint
@@ -55,9 +56,11 @@ main = do
                    | otherwise                    = []                        -- No package search path
       when (verbosityGT flags 1) $
         putStrLn $ "flags = " ++ show flags
-      case listPkg flags of
-        Just p -> mainListPkg flags p
-        Nothing -> do
+      let inlineSource = inlineSrc flags
+      case (inlineSource, listPkg flags) of
+        (Just src, _) -> mainInline flags src
+        (_, Just p) -> mainListPkg flags p
+        _ -> do
           preload' <- mapM (findAPackage flags) (preload flags)
           let flags' = flags { preload = preload' }
           case buildPkg flags' of
@@ -103,6 +106,8 @@ longUsage = usage ++ "\nOptions:\n" ++ details
       \                   If FILE ends in .comb produce a combinator file\n\
       \                   If FILE ends in .c produce a C file\n\
       \                   Otherwise compile the combinators together with the runtime system to produce a regular executable\n\
+      \-O                 Write the generated .comb to stdout (raw)\n\
+      \-e CODE            Compile inline source CODE (prepend module header automatically)\n\
       \-a                 Clear package search path\n\
       \-aPATH             Add PATH to package search path\n\
       \-L[FILE|PKG]       List all modules of a package\n\
@@ -147,6 +152,7 @@ decodeArgs f mdls (arg:args) =
     '-':'i':[]  -> decodeArgs f{paths = []} mdls args
     '-':'i':s   -> decodeArgs f{paths = paths f ++ [s]} mdls args
     '-':'o':s   -> decodeArgs f{output = s} mdls args
+    "-O"        -> decodeArgs f{stdoutComb = True} mdls args
     '-':'t':s   -> decodeArgs f{target = s} mdls args
     '-':'D':_   -> decodeArgs f{cppArgs = cppArgs f ++ [arg]} mdls args
     '-':'I':_   -> decodeArgs f{cppArgs = cppArgs f ++ [arg]} mdls args
@@ -158,6 +164,9 @@ decodeArgs f mdls (arg:args) =
     '-':'d':'d':'u':'m':'p':'-':r | Just d <- lookup r dumpFlagTable ->
                    decodeArgs f{dumpFlags = d : dumpFlags f} mdls args
     "--stdin"   -> decodeArgs f{useStdin = True} mdls args
+    "-e" | code : args' <- args
+                -> decodeArgs f{inlineSrc = Just code} mdls args'
+    "-e"       -> mhsError "-e requires an argument"
     '-':_       -> mhsError $ "Unknown flag: " ++ arg ++ "\n" ++ usage
     _ | arg `hasTheExtension` ".c" || arg `hasTheExtension` ".o" || arg `hasTheExtension` ".a"
                 -> decodeArgs f{cArgs = cArgs f ++ [arg]} mdls args
@@ -352,11 +361,7 @@ mainCompile flags mn = do
     --  * file ends in .c: write C version of combinator
     --  * otherwise, write C file and compile to a binary with cc
     if outFile `hasTheExtension` ".comb" then do
-      h <- openBinaryFile outFile WriteMode
-      h' <- if base64 flags then do addBase64 h else return h
-      h'' <- if compress flags then do hPutChar h' 'z'; addLZ77 h' else return h'
-      hPutStr h'' outData
-      hClose h''
+      emitCombinators flags outData
      else if outFile `hasTheExtension` ".c" then
       writeFile outFile cCode
      else do
@@ -464,3 +469,30 @@ convertToInclude inc pkg = dropExtension pkg </> inc
 
 hasTheExtension :: FilePath -> String -> Bool
 hasTheExtension f e = e `isSuffixOf` f
+
+emitCombinators :: Flags -> String -> IO ()
+emitCombinators flags outData
+  | stdoutComb flags = do
+      hPutStr stdout outData
+      hFlush stdout
+  | otherwise = do
+      let outFile = output flags
+      h <- openBinaryFile outFile WriteMode
+      h' <- if base64 flags then addBase64 h else return h
+      h'' <- if compress flags then do hPutChar h' 'z'; addLZ77 h' else return h'
+      hPutStr h'' outData
+      hClose h''
+
+mainInline :: Flags -> String -> IO ()
+mainInline flags src = do
+  let withModuleHeader =
+        case dropWhile isSpace src of
+          ('m':'o':'d':'u':'l':'e':_) -> src
+          _ -> "module Inline where\n" ++ src
+  (tmpPath, tmpHandle) <- openTmpFile "inline.hs"
+  let cleanup = do
+        hClose tmpHandle
+        removeFile tmpPath
+  (do hPutStr tmpHandle withModuleHeader
+      hFlush tmpHandle
+      mainCompile flags (mkIdent tmpPath)) `finally` cleanup

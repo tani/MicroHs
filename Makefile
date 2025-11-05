@@ -11,11 +11,20 @@
 PREFIX=/usr/local
 # Unix-like system, 32/64 bit words
 CONF=unix
+UNAME_S:=$(shell uname 2>/dev/null)
+ifeq ($(UNAME_S),Darwin)
+SHLIB_EXT=dylib
+SHLIB_FLAG=-dynamiclib
+else
+SHLIB_EXT=so
+SHLIB_FLAG=-shared
+endif
+LIBMHSI=bin/libmhsi.$(SHLIB_EXT)
 #
 # Using GCC enables global register variables on ARM64, which gives a 5-10% speedup.
 #CC=gcc-14
 RTS=src/runtime
-RTSINC=-I$(RTS) -I$(RTS)/$(CONF)
+RTSINC=-I$(RTS) -I$(RTS)/$(CONF) -Iinclude
 MAINC= $(RTS)/main.c
 #
 CCWARNS= -Wall
@@ -51,7 +60,7 @@ MHSINCNP= -i $(MHSGMP) -imhs -isrc -ilib
 MHSINC=$(MHSINCNP) -ipaths 
 MAINMODULE=MicroHs.Main
 #
-.PHONY:	clean bootstrap install ghcgen newmhs newmhsz cachelib timecompile exampletest cachetest runtest runtestmhs everytest everytestmhs nfibtest info install minstall installmsg
+.PHONY:	clean bootstrap install ghcgen newmhs newmhsz cachelib timecompile exampletest cachetest runtest runtestmhs everytest everytestmhs nfibtest info install minstall installmsg libmhsi
 
 all:	bin/mhs bin/cpphs bin/mcabal
 
@@ -86,6 +95,13 @@ bin/mhseval:	$(RTS)/*.c $(RTS)/*.h $(RTS)/*/*.h
 	@mkdir -p bin
 	$(CCEVAL) $(RTS)/comb.c $(CCLIBS) -o bin/mhseval
 	size bin/mhseval
+
+$(LIBMHSI): $(RTS)/mhseval.c $(RTS)/libmhsi.c $(RTS)/*.c $(RTS)/*.h $(RTS)/*/*.h generated/mhs.c
+	@mkdir -p bin
+	$(CC) $(CCWARNS) $(CCOPTS) $(MHSGMPCCFLAGS) -fPIC $(RTSINC) $(SHLIB_FLAG) \
+		$(RTS)/mhseval.c $(RTS)/libmhsi.c $(CCLIBS) -o $(LIBMHSI)
+
+libmhsi: $(LIBMHSI)
 
 bin/mhsevalgdb:	$(RTS)/*.c $(RTS)/*/*.h
 	@mkdir -p bin
@@ -366,4 +382,3 @@ generated/hmhs.c:
 bin/hmhs: generated/hmhs.c
 	@mkdir -p bin
 	$(CCEVAL) generated/hmhs.c $(CCLIBS) -o bin/hmhs
-

@@ -39,6 +39,39 @@ To compile on Windows make sure `cl` is in the path, and then use `nmake` with `
 
 The compiler can also be used with emscripten to produce JavaScript/WASM.
 
+## Embedding MicroHs
+Run `make libmhsi` to build `bin/libmhsi.so` (or `.dylib` on macOS), a shared object that exposes the runtime entry points declared in `include/mhsi.h`.  The header provides a stateful interpreter that compiles and executes Haskell source strings via the bundled `mhs` compiler.
+
+```c
+#include "mhsi.h"
+#include <stdio.h>
+
+static const char kProgram[] =
+  "module Example where\n"
+  "main = do\n"
+  "  putStrLn \"Hello from MicroHs\"\n";
+
+int main(void) {
+  mhs_set_compiler_path("bin/mhs"); /* optional if mhs is already on PATH */
+  mhsi_interpreter *interp = mhsi_new();
+  if (!interp) {
+    fprintf(stderr, "failed to init MicroHs\n");
+    return 1;
+  }
+
+  if (mhsi_run(interp, kProgram, sizeof(kProgram) - 1) != 0) {
+    fprintf(stderr, "%s\n", mhsi_last_error(interp));
+  }
+
+  mhsi_free(interp);
+  return 0;
+}
+```
+
+Link your program with `-Lbin -lmhsi` and ensure `bin/` is discoverable via `LD_LIBRARY_PATH`/`DYLD_LIBRARY_PATH`.  `mhsi_run` writes your snippet to a temporary file, invokes `mhs` (resolved via `mhs_set_compiler_path()` or the `MHS_COMPILER` environment variable, defaulting to `mhs` on your `PATH`), and streams the resulting combinators into the in-process interpreter.  The helper honours all imports supported by the CLI compiler; if your code depends on packages in `lib/`, set `MHSDIR` (or run from the repository root) so the spawned compiler can find them.
+
+The shared library now ships with an embedded copy of the MicroHs compiler, so no external `mhs` executable is required at runtime. `mhs_set_compiler_path` is kept for source compatibility but no longer influences compilation.
+
 ## Language
 The language is an extended subset of Haskell-2010.
 

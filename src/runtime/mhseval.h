@@ -23,10 +23,18 @@ int mhs_eval_string(MhsContextPtr ctx, const char* expr, size_t len, char** resu
 // Returns 0 on success, error code on failure
 int mhs_run_string(MhsContextPtr ctx, const char* expr, size_t len);
 
+// Run a possibly LZ77-compressed combinator string.
+// The buffer may start with 'z' (compressed) or 'v' (plain); other encodings fall back to base64 decoding.
+int mhs_run_zstring(MhsContextPtr ctx, const char* expr, size_t len);
+
 // Free result string allocated by eval functions
 void mhs_free_result(char* result);
 
 // Get last error message
 const char* mhs_get_error(MhsContextPtr ctx);
+
+// Override the argv that pure Haskell code observes via getArgs/getProgName.
+// Returns 0 on success.
+int mhs_context_set_args(MhsContextPtr ctx, const char *argv[], size_t argc);
 
 #endif
