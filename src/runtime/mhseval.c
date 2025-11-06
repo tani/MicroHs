@@ -140,19 +140,18 @@ static int run_program_from_bfile(
     start_exec(prog);
     flushb((BFILE*)FORPTR(comb_stdout)->payload.string);
     flushb((BFILE*)FORPTR(comb_stderr)->payload.string);
+    gc();
 
     if (result && result_len) {
         char *rendered = node_to_string(prog, result_len);
         if (!rendered) {
             strncpy(ctx->error_msg, "Failed to convert result to string", sizeof(ctx->error_msg) - 1);
             ctx->error_occurred = 1;
-            gc();
             return -1;
         }
         *result = rendered;
     }
 
-    gc();
     return 0;
 }
 
