@@ -6,16 +6,9 @@
 #include <string.h>
 #include <errno.h>
 #include <stdint.h>
-#if defined(_WIN32)
-#include <io.h>
-#define dup _dup
-#define dup2 _dup2
-#define close _close
-#else
 #include <unistd.h>
 #include <sys/types.h>
 #include <sys/wait.h>
-#endif
 
 struct ffi_entry;
 struct ffe_entry;
@@ -56,7 +49,6 @@ set_error(char *err_buf, size_t err_len, const char *fmt, ...)
     va_end(args);
 }
 
-#if !defined(_WIN32)
 struct compiler_status_packet {
     int32_t rc;
     uint32_t err_len;
@@ -242,7 +234,6 @@ collect_child_output(int fd,
     }
     return 0;
 }
-#endif
 
 static int run_embedded_mhs_child(const char *source,
                                   size_t source_len,
@@ -256,11 +247,6 @@ static int run_embedded_mhs_child(const char *source,
     if (comb_len) {
         *comb_len = 0;
     }
-#if defined(_WIN32)
-    set_error(err_buf, err_buf_len,
-              "Embedded compiler isolation is not supported on Windows");
-    return -1;
-#else
     int data_pipe[2] = { -1, -1 };
     int status_pipe[2] = { -1, -1 };
     if (pipe(data_pipe) != 0 || pipe(status_pipe) != 0) {
@@ -436,7 +422,6 @@ static int run_embedded_mhs_child(const char *source,
         *comb_len = compiled_len;
     }
     return 0;
-#endif
 }
 
 static int compile_haskell_to_comb(const char *source,

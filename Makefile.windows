@@ -1,7 +1,7 @@
 #
 # Use with nmake
 #
-all:    bin/mhs.exe bin/mhseval.exe bin/libmhsi.dll
+all:    bin/mhs.exe bin/mhseval.exe
 
 # Compile mhs from distribution, with C compiler
 bin/mhs.exe:	src/runtime/*.c  src/runtime/windows/* #generated/mhs.c
@@ -14,13 +14,6 @@ bin/mhseval.exe:	src/runtime/*.c src/runtime/windows/* src/runtime/comb.c
 	@-mkdir bin
 	@-mkdir build
 	cl -Fobuild\ -O2 -Isrc/runtime -Isrc/runtime/windows -Iinclude src/runtime/main.c src/runtime/eval.c src/runtime/comb.c -Febin/mhseval.exe
-
-# Build the embeddable runtime as a DLL
-bin/libmhsi.dll:	src/runtime/*.c src/runtime/windows/* generated/mhs.c
-	@-mkdir bin
-	@-mkdir build
-	cl -Fobuild\ -O2 -Isrc/runtime -Isrc/runtime/windows -Iinclude -LD \
-		src/runtime/mhseval.c src/runtime/libmhsi.c -link -OUT:bin/libmhsi.dll
 
 exampletest:	bin/mhs.exe bin/mhseval.exe Example.hs
 	bin\mhs -r Example
