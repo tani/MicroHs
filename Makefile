@@ -208,6 +208,10 @@ timecachecompile: bin/mhs
 	time bin/mhs +RTS -v -RTS -CW AllOfLib
 	time bin/mhs +RTS -v -RTS -CR -s $(MHSINC) $(MAINMODULE)
 
+Tools/repl: Tools/repl.c Tools/Repl.hs bin/mhs
+	MHSDIR=. bin/mhs -c -optc --shared -optc -fPIC $(MHSINC) -iTools Repl -oTools/ReplHs.so
+	$(CC) $(CCWARNS) -lm -ITools Tools/repl.c Tools/ReplHs.so -Wl,-rpath,'$$ORIGIN' -o Tools/repl
+
 #
 timemhscompile:
 	@date
